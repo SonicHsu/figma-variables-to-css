@@ -130,6 +130,7 @@ export default function bootstrap() {
     const collections =
       await figma.variables.getLocalVariableCollectionsAsync();
     const result: VariableResult[] = [];
+    const seen = new Set<string>();
 
     for (const collection of collections) {
       const modeId = collection.defaultModeId;
@@ -138,6 +139,10 @@ export default function bootstrap() {
         const variable =
           await figma.variables.getVariableByIdAsync(variableId);
         if (!variable) continue;
+
+        // Deduplicate by variable name to avoid duplicate CSS output
+        if (seen.has(variable.name)) continue;
+        seen.add(variable.name);
 
         const resolved = await resolveValue(variable, modeId);
 

@@ -79,14 +79,19 @@ function detectGroups(variables: FigmaVariable[]): {
     }
 
     const className = toKebabCase(parentPath);
-    const properties = vars.map((v: FigmaVariable) => {
+    const seenProps = new Set<string>();
+    const properties: { cssProp: string; value: string }[] = [];
+    for (const v of vars) {
       const leafName = v.name.substring(v.name.lastIndexOf("/") + 1).toLowerCase().trim();
       const cssProp = PROPERTY_MAP[leafName];
+      // Deduplicate: keep the first variable that maps to each CSS property
+      if (seenProps.has(cssProp)) continue;
+      seenProps.add(cssProp);
       const value = v.isAlias
         ? `var(--${toKebabCase(v.aliasName ?? v.value)})`
         : formatValue(cssProp, v.value);
-      return { cssProp, value };
-    });
+      properties.push({ cssProp, value });
+    }
 
     groups.push({ className, properties });
   });
