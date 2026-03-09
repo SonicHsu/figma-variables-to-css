@@ -19,7 +19,8 @@
     "build:js": "build-figma-plugin --typecheck --minify",
     "watch": "pnpm run build:css && concurrently pnpm:watch:css pnpm:watch:js",
     "watch:css": "npx @tailwindcss/cli --input ./src/input.css --output ./src/output.css --watch",
-    "watch:js": "build-figma-plugin --typecheck --watch"
+    "watch:js": "build-figma-plugin --typecheck --watch",
+    "proxy": "node proxy/server.js"
   },
   "figma-plugin": {
     "editorType": [
@@ -28,6 +29,12 @@
     "id": "preact-tailwindcss",
     "name": "Preact Tailwind Css",
     "main": "src/main.ts",
-    "ui": "src/ui.tsx"
+    "ui": "src/ui.tsx",
+    "networkAccess": {
+      "allowedDomains": [
+        "*"
+      ],
+      "reasoning": "Needs to connect to self-hosted GitLab instances to commit design token CSS files via the GitLab API."
+    }
   }
 }

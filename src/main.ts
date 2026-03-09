@@ -23,7 +23,6 @@ async function resolveValue(
 ): Promise<{ value: string; isAlias: boolean; aliasName: string | null }> {
   const rawValue = variable.valuesByMode[modeId];
 
-  // Check if value is an alias (reference to another variable)
   if (
     typeof rawValue === "object" &&
     rawValue !== null &&
@@ -42,13 +41,83 @@ async function resolveValue(
     return { value: alias.id, isAlias: true, aliasName: null };
   }
 
-  // Resolve actual value
   if (variable.resolvedType === "COLOR") {
     const c = rawValue as { r: number; g: number; b: number; a: number };
     return { value: rgbToHex(c.r, c.g, c.b), isAlias: false, aliasName: null };
   }
 
   return { value: String(rawValue), isAlias: false, aliasName: null };
+}
+
+// GitLab API (runs in plugin sandbox, no Mixed Content restriction)
+interface GitLabCommitParams {
+  host: string;
+  token: string;
+  projectId: string;
+  branch: string;
+  filePath: string;
+  content: string;
+  commitMessage: string;
+}
+
+function getBaseUrl(host: string): string {
+  // Route HTTP GitLab hosts through local HTTPS proxy to avoid Mixed Content
+  if (host.startsWith("http://")) {
+    return "http://localhost:9801";
+  }
+  return host;
+}
+
+async function commitToGitLab(params: GitLabCommitParams): Promise<string> {
+  const { host, token, projectId, branch, filePath, content, commitMessage } = params;
+
+  const baseUrl = getBaseUrl(host);
+  const encodedProject = encodeURIComponent(projectId);
+  const encodedPath = encodeURIComponent(filePath);
+
+  // Check if file exists
+  const checkUrl = `${baseUrl}/api/v4/projects/${encodedProject}/repository/files/${encodedPath}?ref=${encodeURIComponent(branch)}`;
+  const checkRes = await fetch(checkUrl, {
+    headers: { "PRIVATE-TOKEN": token },
+  });
+  const action = checkRes.status === 404 ? "create" : "update";
+
+  if (checkRes.status !== 404 && !checkRes.ok) {
+    const text = await checkRes.text();
+    throw new Error(`GitLab GET file failed (${checkRes.status}): ${text}`);
+  }
+
+  // Commit
+  const commitUrl = `${baseUrl}/api/v4/projects/${encodedProject}/repository/commits`;
+  const body = {
+    branch,
+    commit_message: commitMessage,
+    actions: [
+      {
+        action,
+        file_path: filePath,
+        content,
+        encoding: "text",
+      },
+    ],
+  };
+
+  const res = await fetch(commitUrl, {
+    method: "POST",
+    headers: {
+      "PRIVATE-TOKEN": token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitLab commit failed (${res.status}): ${text}`);
+  }
+
+  const data = (await res.json()) as { web_url?: string; id?: string };
+  return data.web_url || data.id || "Commit created";
 }
 
 export default function bootstrap() {
@@ -84,5 +153,33 @@ export default function bootstrap() {
     }
 
     figma.ui.postMessage({ type: "VARIABLES_RESULT", data: result });
+  });
+
+  // Settings persistence via figma.clientStorage
+  const SETTINGS_KEY = "gitlab-settings";
+
+  on("LOAD_SETTINGS", async () => {
+    const saved = await figma.clientStorage.getAsync(SETTINGS_KEY);
+    if (saved) {
+      figma.ui.postMessage({ type: "SETTINGS_LOADED", data: saved });
+    }
+  });
+
+  on("SAVE_SETTINGS", async (data: unknown) => {
+    await figma.clientStorage.setAsync(SETTINGS_KEY, data);
+  });
+
+  // GitLab commit handler
+  on("GITLAB_COMMIT", async (params: GitLabCommitParams) => {
+    try {
+      const result = await commitToGitLab(params);
+      figma.ui.postMessage({ type: "COMMIT_RESULT", success: true, data: result });
+    } catch (err) {
+      figma.ui.postMessage({
+        type: "COMMIT_RESULT",
+        success: false,
+        data: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 }
