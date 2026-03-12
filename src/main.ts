@@ -1,11 +1,12 @@
 import { on, showUI } from "@create-figma-plugin/utilities";
 
-function rgbToHex(r: number, g: number, b: number): string {
+function rgbToHex(r: number, g: number, b: number, a: number): string {
   const toHex = (n: number) =>
     Math.round(n * 255)
       .toString(16)
       .padStart(2, "0");
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  const hex = `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  return a < 1 ? `${hex}${toHex(a)}` : hex;
 }
 
 interface VariableResult {
@@ -43,7 +44,7 @@ async function resolveValue(
 
   if (variable.resolvedType === "COLOR") {
     const c = rawValue as { r: number; g: number; b: number; a: number };
-    return { value: rgbToHex(c.r, c.g, c.b), isAlias: false, aliasName: null };
+    return { value: rgbToHex(c.r, c.g, c.b, c.a), isAlias: false, aliasName: null };
   }
 
   return { value: String(rawValue), isAlias: false, aliasName: null };

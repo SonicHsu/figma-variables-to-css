@@ -126,7 +126,7 @@ function Plugin() {
   return (
     <div class="text-xs">
       {/* Version */}
-      <div class="bg-gray-50 text-gray-400 text-center py-0.5 text-xs">v0.8.0</div>
+      <div class="bg-gray-50 text-gray-400 text-center py-0.5 text-xs">v0.13.0</div>
 
       {/* Tab Bar */}
       <div class="flex border-b border-gray-200 bg-white">
@@ -184,7 +184,22 @@ function PreviewTab({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(cssOutput).then(() => {
+    // navigator.clipboard may be blocked in Figma iframe; use execCommand fallback
+    const tryClipboard = () => {
+      if (navigator.clipboard?.writeText) {
+        return navigator.clipboard.writeText(cssOutput);
+      }
+      const ta = document.createElement("textarea");
+      ta.value = cssOutput;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy"); // eslint-disable-line deprecation/deprecation
+      ta.remove();
+      return Promise.resolve();
+    };
+    tryClipboard().then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -225,7 +240,7 @@ function PreviewTab({
               <h3 class="font-bold text-sm">CSS Output</h3>
               <button
                 class="text-xs px-2 py-0.5 rounded border border-gray-300 hover:bg-gray-100 transition-colors"
-                style={{ color: copied ? "#16a34a" : "#374151" }}
+                style={{ color: copied ? "#16a34a" : "#374151", cursor: cssOutput ? "pointer" : "not-allowed" }}
                 onClick={handleCopy}
                 disabled={!cssOutput}
               >

@@ -16,7 +16,6 @@ function toKebabCase(name: string): string {
 }
 
 // Map Figma collection names to Tailwind v4 @theme namespace prefixes
-// https://tailwindcss.com/docs/v4-upgrade#renamed-utility-classes
 const COLLECTION_NAMESPACE: Record<string, string> = {
   color: "color",
   colors: "color",
@@ -59,11 +58,67 @@ interface GroupedClass {
   properties: { cssProp: string; value: string }[];
 }
 
+/** Normalize collection name: "Font theme/EN" → "Font theme" */
+function normalizeCollection(collection: string): string {
+  return (collection.split("/")[0] ?? collection).trim();
+}
+
 /**
- * Detect typescale groups: variables whose leaf names map to CSS properties
- * and share the same parent path with 2+ siblings.
+ * Build a lookup map: Figma variable name → CSS variable name (with namespace).
+ * Used to resolve alias references to the correct --namespace-leaf form.
+ * Only covers non-typescale (ungrouped) variables.
  */
-function detectTypescaleGroups(variables: FigmaVariable[]): {
+function buildVarLookup(variables: FigmaVariable[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const v of variables) {
+    const normalized = normalizeCollection(v.collection);
+    const namespace = COLLECTION_NAMESPACE[normalized.toLowerCase()];
+    const leaf = v.name.substring(v.name.lastIndexOf("/") + 1);
+    const kebab = toKebabCase(leaf);
+    const cssName = namespace ? `--${namespace}-${kebab}` : `--${kebab}`;
+    // Index by full name and by leaf name for flexible lookup
+    map.set(v.name, cssName);
+    map.set(leaf, cssName);
+  }
+  return map;
+}
+
+function resolveThemeVarName(v: FigmaVariable): string {
+  const normalized = normalizeCollection(v.collection);
+  const namespace = COLLECTION_NAMESPACE[normalized.toLowerCase()];
+  const leaf = v.name.substring(v.name.lastIndexOf("/") + 1);
+  const kebab = toKebabCase(leaf);
+  return namespace ? `--${namespace}-${kebab}` : `--${kebab}`;
+}
+
+/**
+ * Group variables by their direct parent segment (one level above the leaf).
+ * e.g. "Color/hd-system/hd-green-50" → section "hd-system"
+ *      "Color/hd-green-50"           → section "" (no sub-group)
+ */
+function groupBySection(variables: FigmaVariable[]): Map<string, FigmaVariable[]> {
+  const map = new Map<string, FigmaVariable[]>();
+  for (const v of variables) {
+    const parts = v.name.split("/");
+    const section = parts.length >= 2 ? (parts[parts.length - 2] ?? "") : "";
+    const list = map.get(section) ?? [];
+    list.push(v);
+    map.set(section, list);
+  }
+  return map;
+}
+
+/**
+ * Detect typescale groups: variables from "Typescale/CH", "Typescale/EN" etc.
+ * whose leaf names map to CSS properties and share the same parent path with 2+ siblings.
+ *
+ * Class name format: text-{lang}-{group}  e.g. .text-ch-h1, .text-en-h1
+ * var() values are resolved via the varLookup map for precision.
+ */
+function detectTypescaleGroups(
+  variables: FigmaVariable[],
+  varLookup: Map<string, string>
+): {
   groups: GroupedClass[];
   ungrouped: FigmaVariable[];
 } {
@@ -98,17 +153,45 @@ function detectTypescaleGroups(variables: FigmaVariable[]): {
       return;
     }
 
-    const className = toKebabCase(parentPath);
+    // Build class name from collection language + group name
+    // e.g. collection="Typescale/CH", parentPath="Typescale/CH/H1" → "text-ch-h1"
+    // e.g. collection="Typescale",    parentPath="Typescale/H1"     → "text-h1"
+    const collectionOfFirst = vars[0]!.collection;
+    const collectionParts = collectionOfFirst.split("/");
+    const lang = collectionParts.length >= 2
+      ? toKebabCase(collectionParts[collectionParts.length - 1] ?? "")
+      : null;
+
+    // parentPath segments after the collection prefix
+    const collectionPrefix = collectionOfFirst + "/";
+    const groupPath = parentPath.startsWith(collectionPrefix)
+      ? parentPath.substring(collectionPrefix.length)
+      : parentPath.substring(parentPath.lastIndexOf("/") + 1);
+
+    const groupKebab = toKebabCase(groupPath);
+    const className = lang ? `text-${lang}-${groupKebab}` : `text-${groupKebab}`;
+
     const seenProps = new Set<string>();
     const properties: { cssProp: string; value: string }[] = [];
+
     for (const v of vars) {
       const leafName = v.name.substring(v.name.lastIndexOf("/") + 1).toLowerCase().trim();
-      const cssProp = PROPERTY_MAP[leafName]!;
+      const cssProp = PROPERTY_MAP[leafName] ?? "";
       if (seenProps.has(cssProp)) continue;
       seenProps.add(cssProp);
-      const value = v.isAlias
-        ? `var(--${toKebabCase(v.aliasName ?? v.value)})`
-        : formatValue(cssProp, v.value);
+
+      let value: string;
+      if (v.isAlias) {
+        const aliasTarget = v.aliasName ?? v.value;
+        // Look up the precise CSS var name from the pre-built map
+        const resolved = varLookup.get(aliasTarget)
+          ?? varLookup.get(aliasTarget.substring(aliasTarget.lastIndexOf("/") + 1))
+          ?? `--${toKebabCase(aliasTarget)}`;
+        value = `var(${resolved})`;
+      } else {
+        value = formatValue(cssProp, v.value);
+      }
+
       properties.push({ cssProp, value });
     }
 
@@ -130,85 +213,6 @@ function formatValue(cssProp: string, value: string): string {
   return value;
 }
 
-/**
- * Resolve the Tailwind @theme CSS variable name for a variable.
- * Uses collection name to determine the namespace prefix.
- * Variable name: only the leaf segment is used, stripping the collection prefix if present.
- *
- * Examples:
- *   collection="Color", name="Color/hd-green-50"  → --color-hd-green-50
- *   collection="Font Size", name="Font Size/h1"   → --text-h1
- *   collection="Font Theme", name="Font Theme/CN/body" → --font-cn-body
- */
-function resolveThemeVarName(v: FigmaVariable): string {
-  const collectionKey = v.collection.toLowerCase().trim();
-  const namespace = COLLECTION_NAMESPACE[collectionKey];
-
-  // Strip the collection name prefix from the variable path if present
-  let namePath = v.name;
-  const collectionPrefix = v.collection + "/";
-  if (namePath.startsWith(collectionPrefix)) {
-    namePath = namePath.substring(collectionPrefix.length);
-  }
-
-  // Convert remaining path to kebab-case (slashes become dashes)
-  const kebab = toKebabCase(namePath);
-
-  if (namespace) {
-    return `--${namespace}-${kebab}`;
-  }
-  // Unknown collection: fall back to plain --var-name
-  return `--${kebab}`;
-}
-
-/**
- * Group variables by their "section comment" for @theme output.
- * Section = the path excluding collection prefix and leaf name.
- * e.g. "Color/Neutral/hd-gray-50" → section "Neutral"
- */
-function groupBySection(variables: FigmaVariable[]): Map<string, FigmaVariable[]> {
-  const map = new Map<string, FigmaVariable[]>();
-  for (const v of variables) {
-    // Strip collection prefix
-    let namePath = v.name;
-    const collectionPrefix = v.collection + "/";
-    if (namePath.startsWith(collectionPrefix)) {
-      namePath = namePath.substring(collectionPrefix.length);
-    }
-
-    // Section = everything except the leaf
-    const parts = namePath.split("/");
-    const section = parts.length > 1 ? parts.slice(0, -1).join(" / ") : "";
-
-    const list = map.get(section) ?? [];
-    list.push(v);
-    map.set(section, list);
-  }
-  return map;
-}
-
-function generateThemeBlock(variables: FigmaVariable[]): string {
-  if (variables.length === 0) return "";
-
-  const sectionMap = groupBySection(variables);
-  const lines: string[] = [];
-
-  sectionMap.forEach((vars, section) => {
-    if (section) {
-      lines.push(`  /* ${section} */`);
-    }
-    for (const v of vars) {
-      const cssName = resolveThemeVarName(v);
-      const cssValue = v.isAlias
-        ? `var(--${toKebabCase(v.aliasName ?? v.value)})`
-        : v.value;
-      lines.push(`  ${cssName}: ${cssValue};`);
-    }
-  });
-
-  return `@theme {\n${lines.join("\n")}\n}`;
-}
-
 function generateClasses(groups: GroupedClass[]): string {
   return groups
     .map((g) => {
@@ -223,25 +227,47 @@ function generateClasses(groups: GroupedClass[]): string {
 export function generateCSS(variables: FigmaVariable[]): string {
   if (variables.length === 0) return "";
 
-  // Separate typescale variables (handled as utility classes) from theme vars
-  const { groups, ungrouped } = detectTypescaleGroups(variables);
+  // Build lookup first (all variables, for alias resolution in typescale)
+  const varLookup = buildVarLookup(variables);
+
+  // Separate typescale variables from @theme vars
+  const { groups, ungrouped } = detectTypescaleGroups(variables, varLookup);
 
   const parts: string[] = [];
 
-  // Group by collection → each collection gets its own @theme block
-  const byCollection = new Map<string, FigmaVariable[]>();
-  for (const v of ungrouped) {
-    const list = byCollection.get(v.collection) ?? [];
-    list.push(v);
-    byCollection.set(v.collection, list);
-  }
-
-  byCollection.forEach((vars, collection) => {
-    const block = generateThemeBlock(vars);
-    if (block) {
-      parts.push(`/* ${collection} */\n${block}`);
+  if (ungrouped.length > 0) {
+    // Merge collections by normalized name, all into one @theme block
+    const byCollection = new Map<string, FigmaVariable[]>();
+    for (const v of ungrouped) {
+      const key = normalizeCollection(v.collection);
+      const list = byCollection.get(key) ?? [];
+      list.push(v);
+      byCollection.set(key, list);
     }
-  });
+
+    const collectionBlocks: string[] = [];
+    byCollection.forEach((vars, collection) => {
+      const blockLines: string[] = [];
+      blockLines.push(`  /* ${collection} */`);
+      const sectionMap = groupBySection(vars);
+      sectionMap.forEach((sVars, section) => {
+        if (section) {
+          blockLines.push(`  /* ${section} */`);
+        }
+        for (const v of sVars) {
+          const cssName = resolveThemeVarName(v);
+          const aliasTarget = v.aliasName ?? v.value;
+          const cssValue = v.isAlias
+            ? `var(${varLookup.get(aliasTarget) ?? "--" + toKebabCase(aliasTarget)})`
+            : v.value;
+          blockLines.push(`  ${cssName}: ${cssValue};`);
+        }
+      });
+      collectionBlocks.push(blockLines.join("\n"));
+    });
+
+    parts.push(`@theme {\n${collectionBlocks.join("\n\n")}\n}`);
+  }
 
   const classes = generateClasses(groups);
   if (classes) parts.push(classes);
