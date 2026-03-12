@@ -181,6 +181,15 @@ function PreviewTab({
   cssOutput: string;
   onRefresh: () => void;
 }>) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(cssOutput).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [cssOutput]);
+
   return (
     <div class="space-y-3">
       <div class="flex items-center justify-between">
@@ -212,7 +221,17 @@ function PreviewTab({
           </ul>
 
           <div>
-            <h3 class="font-bold text-sm mb-1">CSS Output</h3>
+            <div class="flex items-center justify-between mb-1">
+              <h3 class="font-bold text-sm">CSS Output</h3>
+              <button
+                class="text-xs px-2 py-0.5 rounded border border-gray-300 hover:bg-gray-100 transition-colors"
+                style={{ color: copied ? "#16a34a" : "#374151" }}
+                onClick={handleCopy}
+                disabled={!cssOutput}
+              >
+                {copied ? "已複製!" : "複製全部"}
+              </button>
+            </div>
             <pre class="bg-gray-50 border border-gray-200 rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
               {cssOutput}
             </pre>
