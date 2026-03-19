@@ -201,6 +201,21 @@ function detectTypescaleGroups(
   return { groups, ungrouped };
 }
 
+/** Add px units to ungrouped variables based on their collection namespace */
+function formatValueByNamespace(collection: string, value: string): string {
+  const ns = COLLECTION_NAMESPACE[collection.toLowerCase()];
+  // Namespaces whose values are numeric lengths needing px
+  const pxNamespaces = new Set(["text", "leading", "tracking", "spacing", "radius"]);
+  if (ns && pxNamespaces.has(ns)) {
+    const num = Number.parseFloat(value);
+    if (!Number.isNaN(num)) {
+      if (ns === "tracking" && num === 0) return "normal";
+      return `${num}px`;
+    }
+  }
+  return value;
+}
+
 function formatValue(cssProp: string, value: string): string {
   if (cssProp === "font-size" || cssProp === "line-height") {
     const num = Number.parseFloat(value);
@@ -259,7 +274,7 @@ export function generateCSS(variables: FigmaVariable[]): string {
           const aliasTarget = v.aliasName ?? v.value;
           const cssValue = v.isAlias
             ? `var(${varLookup.get(aliasTarget) ?? "--" + toKebabCase(aliasTarget)})`
-            : v.value;
+            : formatValueByNamespace(collection, v.value);
           blockLines.push(`  ${cssName}: ${cssValue};`);
         }
       });
