@@ -123,6 +123,7 @@ function detectTypescaleGroups(
   ungrouped: FigmaVariable[];
 } {
   const parentMap = new Map<string, FigmaVariable[]>();
+  const parentPathMap = new Map<string, string>(); // groupKey → actual parentPath
   const ungrouped: FigmaVariable[] = [];
 
   for (const v of variables) {
@@ -137,9 +138,11 @@ function detectTypescaleGroups(
     const cssProp = PROPERTY_MAP[leafName];
 
     if (cssProp) {
-      const list = parentMap.get(parentPath) ?? [];
+      const groupKey = `${v.collection}::${parentPath}`;
+      const list = parentMap.get(groupKey) ?? [];
       list.push(v);
-      parentMap.set(parentPath, list);
+      parentMap.set(groupKey, list);
+      parentPathMap.set(groupKey, parentPath);
     } else {
       ungrouped.push(v);
     }
@@ -147,7 +150,8 @@ function detectTypescaleGroups(
 
   const groups: GroupedClass[] = [];
 
-  parentMap.forEach((vars, parentPath) => {
+  parentMap.forEach((vars, groupKey) => {
+    const parentPath = parentPathMap.get(groupKey) ?? groupKey;
     if (vars.length < 2) {
       ungrouped.push(...vars);
       return;
@@ -156,7 +160,7 @@ function detectTypescaleGroups(
     // Build class name from collection language + group name
     // e.g. collection="Typescale/CH", parentPath="Typescale/CH/H1" → "text-ch-h1"
     // e.g. collection="Typescale",    parentPath="Typescale/H1"     → "text-h1"
-    const collectionOfFirst = vars[0]!.collection;
+    const collectionOfFirst = vars[0].collection;
     const collectionParts = collectionOfFirst.split("/");
     const lang = collectionParts.length >= 2
       ? toKebabCase(collectionParts[collectionParts.length - 1] ?? "")
@@ -201,9 +205,20 @@ function detectTypescaleGroups(
   return { groups, ungrouped };
 }
 
+/** Wrap a font family name in quotes and append sans-serif fallback */
+function formatFontFamily(value: string): string {
+  const trimmed = value.trim();
+  // Already quoted — leave as-is, just add fallback
+  if (trimmed.startsWith("'") || trimmed.startsWith('"')) {
+    return `${trimmed}, sans-serif`;
+  }
+  return `'${trimmed}', sans-serif`;
+}
+
 /** Add px units to ungrouped variables based on their collection namespace */
 function formatValueByNamespace(collection: string, value: string): string {
   const ns = COLLECTION_NAMESPACE[collection.toLowerCase()];
+  if (ns === "font") return formatFontFamily(value);
   // Namespaces whose values are numeric lengths needing px
   const pxNamespaces = new Set(["text", "leading", "tracking", "spacing", "radius"]);
   if (ns && pxNamespaces.has(ns)) {
@@ -217,6 +232,7 @@ function formatValueByNamespace(collection: string, value: string): string {
 }
 
 function formatValue(cssProp: string, value: string): string {
+  if (cssProp === "font-family") return formatFontFamily(value);
   if (cssProp === "font-size" || cssProp === "line-height") {
     const num = Number.parseFloat(value);
     if (!Number.isNaN(num)) return `${num}px`;
@@ -288,4 +304,45 @@ export function generateCSS(variables: FigmaVariable[]): string {
   if (classes) parts.push(classes);
 
   return parts.join("\n\n") + "\n";
+}
+
+export function generateCSSParts(variables: FigmaVariable[]): { theme: string; typescale: string } {
+  if (variables.length === 0) return { theme: "", typescale: "" };
+
+  const varLookup = buildVarLookup(variables);
+  const { groups, ungrouped } = detectTypescaleGroups(variables, varLookup);
+
+  let theme = "";
+  if (ungrouped.length > 0) {
+    const byCollection = new Map<string, FigmaVariable[]>();
+    for (const v of ungrouped) {
+      const key = normalizeCollection(v.collection);
+      const list = byCollection.get(key) ?? [];
+      list.push(v);
+      byCollection.set(key, list);
+    }
+    const collectionBlocks: string[] = [];
+    byCollection.forEach((vars, collection) => {
+      const blockLines: string[] = [];
+      blockLines.push(`  /* ${collection} */`);
+      const sectionMap = groupBySection(vars);
+      sectionMap.forEach((sVars, section) => {
+        if (section) blockLines.push(`  /* ${section} */`);
+        for (const v of sVars) {
+          const cssName = resolveThemeVarName(v);
+          const aliasTarget = v.aliasName ?? v.value;
+          const cssValue = v.isAlias
+            ? `var(${varLookup.get(aliasTarget) ?? "--" + toKebabCase(aliasTarget)})`
+            : formatValueByNamespace(collection, v.value);
+          blockLines.push(`  ${cssName}: ${cssValue};`);
+        }
+      });
+      collectionBlocks.push(blockLines.join("\n"));
+    });
+    theme = `@theme {\n${collectionBlocks.join("\n\n")}\n}\n`;
+  }
+
+  const typescale = groups.length > 0 ? generateClasses(groups) + "\n" : "";
+
+  return { theme, typescale };
 }

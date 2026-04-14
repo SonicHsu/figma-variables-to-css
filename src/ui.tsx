@@ -3,7 +3,7 @@ import { render } from "@create-figma-plugin/ui";
 import { emit } from "@create-figma-plugin/utilities";
 import { h } from "preact";
 import { useEffect, useState, useCallback } from "preact/hooks";
-import { generateCSS, type FigmaVariable } from "./css-generator";
+import { generateCSS, generateCSSParts, type FigmaVariable } from "./css-generator";
 
 type Tab = "preview" | "settings";
 
@@ -54,6 +54,7 @@ function Plugin() {
   }, []);
 
   const cssOutput = generateCSS(variables);
+  const cssParts = generateCSSParts(variables);
 
   const updateSetting = useCallback(
     (key: keyof GitLabSettings, value: string) => {
@@ -126,7 +127,7 @@ function Plugin() {
   return (
     <div class="text-xs">
       {/* Version */}
-      <div class="bg-gray-50 text-gray-400 text-center py-0.5 text-xs">v0.13.0</div>
+      <div class="bg-gray-50 text-gray-400 text-center py-0.5 text-xs">v0.13.2</div>
 
       {/* Tab Bar */}
       <div class="flex border-b border-gray-200 bg-white">
@@ -158,6 +159,7 @@ function Plugin() {
           <PreviewTab
             variables={variables}
             cssOutput={cssOutput}
+            cssParts={cssParts}
             onRefresh={handleRefresh}
           />
         ) : (
@@ -172,25 +174,13 @@ function Plugin() {
   );
 }
 
-function PreviewTab({
-  variables,
-  cssOutput,
-  onRefresh,
-}: Readonly<{
-  variables: FigmaVariable[];
-  cssOutput: string;
-  onRefresh: () => void;
-}>) {
+function CopyButton({ text }: Readonly<{ text: string }>) {
   const [copied, setCopied] = useState(false);
-
   const handleCopy = useCallback(() => {
-    // navigator.clipboard may be blocked in Figma iframe; use execCommand fallback
     const tryClipboard = () => {
-      if (navigator.clipboard?.writeText) {
-        return navigator.clipboard.writeText(cssOutput);
-      }
+      if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
       const ta = document.createElement("textarea");
-      ta.value = cssOutput;
+      ta.value = text;
       ta.style.position = "fixed";
       ta.style.opacity = "0";
       document.body.appendChild(ta);
@@ -203,8 +193,30 @@ function PreviewTab({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-  }, [cssOutput]);
+  }, [text]);
+  return (
+    <button
+      class="text-xs px-2 py-0.5 rounded border border-gray-300 hover:bg-gray-100 transition-colors"
+      style={{ color: copied ? "#16a34a" : "#374151", cursor: text ? "pointer" : "not-allowed" }}
+      onClick={handleCopy}
+      disabled={!text}
+    >
+      {copied ? "已複製!" : "複製"}
+    </button>
+  );
+}
 
+function PreviewTab({
+  variables,
+  cssOutput,
+  cssParts,
+  onRefresh,
+}: Readonly<{
+  variables: FigmaVariable[];
+  cssOutput: string;
+  cssParts: { theme: string; typescale: string };
+  onRefresh: () => void;
+}>) {
   return (
     <div class="space-y-3">
       <div class="flex items-center justify-between">
@@ -235,22 +247,38 @@ function PreviewTab({
             ))}
           </ul>
 
-          <div>
-            <div class="flex items-center justify-between mb-1">
-              <h3 class="font-bold text-sm">CSS Output</h3>
-              <button
-                class="text-xs px-2 py-0.5 rounded border border-gray-300 hover:bg-gray-100 transition-colors"
-                style={{ color: copied ? "#16a34a" : "#374151", cursor: cssOutput ? "pointer" : "not-allowed" }}
-                onClick={handleCopy}
-                disabled={!cssOutput}
-              >
-                {copied ? "已複製!" : "複製全部"}
-              </button>
+          {/* Theme block */}
+          {cssParts.theme && (
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <h3 class="font-bold text-sm">@theme</h3>
+                <CopyButton text={cssParts.theme} />
+              </div>
+              <pre class="bg-gray-50 border border-gray-200 rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+                {cssParts.theme}
+              </pre>
             </div>
-            <pre class="bg-gray-50 border border-gray-200 rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-              {cssOutput}
-            </pre>
-          </div>
+          )}
+
+          {/* Typescale block */}
+          {cssParts.typescale && (
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <h3 class="font-bold text-sm">Typescale</h3>
+                <CopyButton text={cssParts.typescale} />
+              </div>
+              <pre class="bg-gray-50 border border-gray-200 rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+                {cssParts.typescale}
+              </pre>
+            </div>
+          )}
+
+          {/* Copy all */}
+          {cssOutput && (
+            <div class="flex justify-end">
+              <CopyButton text={cssOutput} />
+            </div>
+          )}
         </div>
       )}
     </div>

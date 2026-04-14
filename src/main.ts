@@ -141,9 +141,10 @@ export default function bootstrap() {
           await figma.variables.getVariableByIdAsync(variableId);
         if (!variable) continue;
 
-        // Deduplicate by variable name to avoid duplicate CSS output
-        if (seen.has(variable.name)) continue;
-        seen.add(variable.name);
+        // Deduplicate by collection + variable name to avoid duplicate CSS output
+        const seenKey = `${collection.name}::${variable.name}`;
+        if (seen.has(seenKey)) continue;
+        seen.add(seenKey);
 
         const resolved = await resolveValue(variable, modeId);
 
